@@ -1,557 +1,704 @@
 import os
 import pickle
-import joblib
 import numpy as np
+import pandas as pd
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
 
-# --- VERCEL ABSOLUTE PATH RESOLUTION ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "GBML.pkl")
+# Load Model
+MODEL_PATH = "GBML.pkl"
 
-model = None
+def load_model():
+    if os.path.exists(MODEL_PATH):
+        with open(MODEL_PATH, "rb") as f:
+            return pickle.load(f)
+    return None
 
-# Attempt to load model with fallback error handling
-if os.path.exists(MODEL_PATH):
-    try:
-        model = joblib.load(MODEL_PATH)
-        print(f"[SUCCESS] Model loaded with joblib from: {MODEL_PATH}")
-    except Exception:
-        try:
-            with open(MODEL_PATH, "rb") as f:
-                model = pickle.load(f)
-            print(f"[SUCCESS] Model loaded with pickle from: {MODEL_PATH}")
-        except Exception as e:
-            print(f"[ERROR] Failed unpickling model: {e}")
+model = load_model()
 
-# Mock predictor fallback if model load fails or during testing
-class MockGBMLModel:
-    def predict(self, X):
-        X_arr = np.array(X)
-        sales = X_arr[0][10] if len(X_arr[0]) > 10 else 100
-        discount = X_arr[0][12] if len(X_arr[0]) > 12 else 0
-        estimated_profit = (sales * 0.28) - (sales * discount * 1.4)
-        return np.array([estimated_profit])
+# Categorical Feature Mapping helper
+def preprocess_inputs(data_dict, feature_names):
+    """
+    Ensures input data aligns with model features. Converts categorical text 
+    inputs to deterministic numerical representations if required by scikit-learn.
+    """
+    df = pd.DataFrame([data_dict])
+    
+    # Ensure columns match model expected feature order
+    for col in feature_names:
+        if col not in df.columns:
+            df[col] = 0
+            
+    df = df[feature_names]
+    
+    # Convert string columns to numeric codes if scikit-learn expects numeric values
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Deterministic hash encoding to ensure consistent numeric conversion for ML models
+            df[col] = df[col].apply(lambda x: abs(hash(str(x))) % 1000)
+            
+    return df
 
-if model is None:
-    print("[WARNING] Running with mock predictor fallback.")
-    model = MockGBMLModel()
-
-# Category Labels Mapping based on Superstore numerical encodings
-CATEGORIES = {0: "Furniture", 1: "Office Supplies", 2: "Technology"}
-REGIONS = {0: "Central", 1: "East", 2: "South", 3: "West"}
-SEGMENTS = {0: "Consumer", 1: "Corporate", 2: "Home Office"}
-
-def evaluate_profit_tier(profit_val):
-    if profit_val < 0:
-        return {"category": "Loss / Deficit", "badge_class": "badge-loss", "description": "Negative margin unit. Discount strategy needs optimization."}
-    elif profit_val < 20:
-        return {"category": "Low Margin", "badge_class": "badge-low", "description": "Low profitability tier. High volume required."}
-    elif profit_val < 100:
-        return {"category": "Healthy Margin", "badge_class": "badge-healthy", "description": "Standard optimal yield product performance."}
-    else:
-        return {"category": "High Value Profit", "badge_class": "badge-high", "description": "Top-tier revenue driver with max profitability."}
-
-
-# --- EMBEDDED DASHBOARD & UI TEMPLATE WITH ANIMATIONS ---
+# Combined HTML, Modern CSS, and Interactivity JS
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html lang="en" data-theme="emerald">
+<html lang="en" data-theme="obsidian">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gradient Boosting Analytics Studio</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js -->
+    <title>Enterprise Analytics & AI Prediction Studio</title>
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js for Dashboard -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+
     <style>
-        :root[data-theme="emerald"] {
-            --bg-primary: #06140e;
-            --bg-card: #0a2318;
-            --accent: #10b981;
-            --accent-glow: rgba(16, 185, 129, 0.35);
-            --text-main: #ecfdf5;
-            --border: #134e4a;
-        }
-        :root[data-theme="midnight"] {
-            --bg-primary: #0b0f19;
-            --bg-card: #111827;
-            --accent: #f59e0b;
-            --accent-glow: rgba(245, 158, 11, 0.35);
-            --text-main: #f3f4f6;
-            --border: #1f2937;
-        }
-        :root[data-theme="cyberpunk"] {
-            --bg-primary: #05050d;
-            --bg-card: #0d0f23;
-            --accent: #00f0ff;
-            --accent-glow: rgba(0, 240, 255, 0.4);
-            --text-main: #ffffff;
-            --border: #7000ff;
-        }
         :root[data-theme="obsidian"] {
-            --bg-primary: #121212;
-            --bg-card: #1e1e1e;
-            --accent: #8b5cf6;
-            --accent-glow: rgba(139, 92, 246, 0.35);
+            --bg-base: #0b0f19;
+            --bg-surface: rgba(18, 24, 38, 0.75);
+            --bg-card: rgba(26, 34, 52, 0.6);
+            --primary-accent: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --secondary-accent: #a855f7;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: rgba(255, 255, 255, 0.08);
+            --gradient-btn: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+        }
+
+        :root[data-theme="cyber"] {
+            --bg-base: #05050a;
+            --bg-surface: rgba(15, 15, 30, 0.85);
+            --bg-card: rgba(22, 22, 45, 0.7);
+            --primary-accent: #00f0ff;
+            --primary-glow: rgba(0, 240, 255, 0.5);
+            --secondary-accent: #ff007f;
             --text-main: #ffffff;
-            --border: #2d2d2d;
+            --text-muted: #8b8ea9;
+            --border: rgba(0, 240, 255, 0.2);
+            --gradient-btn: linear-gradient(135deg, #00f0ff 0%, #ff007f 100%);
+        }
+
+        :root[data-theme="gold"] {
+            --bg-base: #0d0c0a;
+            --bg-surface: rgba(28, 25, 20, 0.8);
+            --bg-card: rgba(38, 34, 28, 0.65);
+            --primary-accent: #f59e0b;
+            --primary-glow: rgba(245, 158, 11, 0.4);
+            --secondary-accent: #d97706;
+            --text-main: #fffbeb;
+            --text-muted: #b45309;
+            --border: rgba(245, 158, 11, 0.15);
+            --gradient-btn: linear-gradient(135deg, #fbbf24 0%, #d97706 100%);
+        }
+
+        :root[data-theme="emerald"] {
+            --bg-base: #061412;
+            --bg-surface: rgba(11, 33, 29, 0.8);
+            --bg-card: rgba(18, 48, 42, 0.65);
+            --primary-accent: #10b981;
+            --primary-glow: rgba(16, 185, 129, 0.4);
+            --secondary-accent: #059669;
+            --text-main: #ecfdf5;
+            --text-muted: #6ee7b7;
+            --border: rgba(16, 185, 129, 0.15);
+            --gradient-btn: linear-gradient(135deg, #34d399 0%, #059669 100%);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            transition: background-color 0.4s ease, border-color 0.4s ease, color 0.4s ease;
         }
 
         body {
-            background-color: var(--bg-primary);
+            background-color: var(--bg-base);
             color: var(--text-main);
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            transition: background-color 0.4s ease, color 0.4s ease;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 15%, var(--primary-glow) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, var(--primary-glow) 0%, transparent 40%);
         }
 
-        .card-panel {
-            background-color: var(--bg-card);
+        /* Top Navigation Bar */
+        .navbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2.5rem;
+            background: var(--bg-surface);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.35rem;
+            font-weight: 800;
+            background: var(--gradient-btn);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .theme-selector {
+            display: flex;
+            gap: 0.5rem;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.35rem;
+            border-radius: 99px;
             border: 1px solid var(--border);
-            box-shadow: 0 10px 30px -10px var(--accent-glow);
+        }
+
+        .theme-btn {
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            padding: 0.5rem 1rem;
+            border-radius: 99px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .theme-btn.active {
+            background: var(--gradient-btn);
+            color: #ffffff;
+            box-shadow: 0 4px 15px var(--primary-glow);
+        }
+
+        /* Layout Grid */
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 2rem;
+            padding: 2.5rem;
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        @media (max-width: 1024px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards & Glassmorphism */
+        .glass-card {
+            background: var(--bg-surface);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 1.5rem;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .glass-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--gradient-btn);
+            opacity: 0.7;
+        }
+
+        .card-header {
+            margin-bottom: 1.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .card-title i {
+            color: var(--primary-accent);
+        }
+
+        /* Form Controls */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.25rem;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .input-group.full-width {
+            grid-column: span 2;
+        }
+
+        label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        input, select {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.85rem 1.1rem;
+            border-radius: 0.75rem;
+            font-size: 0.95rem;
+            outline: none;
             transition: all 0.3s ease;
         }
 
-        /* --- ADVANCED BUTTON & INTERACTIVE ANIMATIONS --- */
-        .btn-animated {
-            position: relative;
-            background: linear-gradient(135deg, var(--accent) 0%, rgba(255,255,255,0.1) 100%);
-            background-size: 200% 200%;
-            color: #000;
+        input:focus, select:focus {
+            border-color: var(--primary-accent);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        select option {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+        }
+
+        /* Animated Premium Button */
+        .btn-submit {
+            grid-column: span 2;
+            margin-top: 1rem;
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 0.85rem;
+            background: var(--gradient-btn);
+            color: #ffffff;
+            font-size: 1rem;
             font-weight: 700;
-            overflow: hidden;
-            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-            box-shadow: 0 4px 15px var(--accent-glow);
-        }
-
-        .btn-animated:hover {
-            transform: translateY(-2px) scale(1.02);
-            box-shadow: 0 8px 25px var(--accent-glow);
-            background-position: right center;
-        }
-
-        .btn-animated:active {
-            transform: translateY(1px) scale(0.98);
-        }
-
-        /* Currency Selector Pill Animations */
-        .curr-btn {
+            cursor: pointer;
             position: relative;
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
             overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            box-shadow: 0 10px 25px var(--primary-glow);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
 
-        .curr-btn::after {
+        .btn-submit:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px var(--primary-glow);
+        }
+
+        .btn-submit:active {
+            transform: translateY(1px);
+        }
+
+        .btn-submit::after {
             content: '';
             position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            transition: width 0.4s ease, height 0.4s ease;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(
+                60deg,
+                transparent,
+                rgba(255, 255, 255, 0.25),
+                transparent
+            );
+            transform: rotate(30deg);
+            animation: shimmer 4s infinite;
         }
 
-        .curr-btn:active::after {
-            width: 200px;
-            height: 200px;
-            opacity: 0;
+        @keyframes shimmer {
+            0% { transform: translate(-100%, -100%) rotate(30deg); }
+            100% { transform: translate(100%, 100%) rotate(30deg); }
         }
 
-        .curr-active {
-            background-color: var(--accent) !important;
-            color: #000 !important;
+        /* Results & Analysis Dashboard */
+        .result-display {
+            text-align: center;
+            padding: 2rem;
+            background: var(--bg-card);
+            border-radius: 1.25rem;
+            border: 1px solid var(--border);
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .result-value {
+            font-size: 3rem;
             font-weight: 800;
-            box-shadow: 0 0 15px var(--accent-glow);
-            transform: scale(1.05);
+            margin: 0.5rem 0;
+            background: var(--gradient-btn);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: pulseValue 2s infinite alternate;
         }
 
-        /* Pulsing Glow Badges */
-        .badge-loss { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
-        .badge-low { background: #78350f; color: #fcd34d; border: 1px solid #f59e0b; }
-        .badge-healthy { background: #065f46; color: #6ee7b7; border: 1px solid #10b981; }
-        .badge-high { background: #3b0764; color: #d8b4fe; border: 1px solid #a855f7; }
-
-        .pulse-badge {
-            animation: pulse-glow 2s infinite;
+        @keyframes pulseValue {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.03); }
         }
 
-        @keyframes pulse-glow {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.85; transform: scale(1.03); }
+        .charts-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
         }
 
-        /* Custom Input Styling */
-        input-field {
-            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        .chart-box {
+            position: relative;
+            height: 250px;
+            width: 100%;
         }
-        input-field:focus {
-            box-shadow: 0 0 10px var(--accent-glow);
+
+        .badge {
+            background: var(--primary-glow);
+            color: var(--primary-accent);
+            padding: 0.35rem 0.85rem;
+            border-radius: 99px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            border: 1px solid var(--border);
         }
     </style>
 </head>
-<body class="min-h-screen pb-12">
+<body>
 
-    <!-- Header / Top Bar -->
-    <header class="border-b border-gray-800 bg-opacity-60 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
-        <div class="flex items-center space-x-3">
-            <div class="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-                <i data-lucide="brain-circuit" class="w-6 h-6 animate-pulse"></i>
-            </div>
-            <div>
-                <h1 class="text-xl font-extrabold tracking-wide">Gradient Boosting Analytics Studio</h1>
-                <p class="text-xs text-gray-400">Production Model Deployment & Feature Analysis</p>
-            </div>
+    <!-- Header / Navbar -->
+    <nav class="navbar">
+        <div class="brand">
+            <i class="fa-solid fa-chart-line-up"></i>
+            <span>GBML Analytics Studio</span>
         </div>
 
-        <div class="flex items-center space-x-2 bg-gray-900/90 p-1.5 rounded-xl border border-gray-800">
-            <i data-lucide="palette" class="w-4 h-4 text-gray-400 ml-2"></i>
-            <span class="text-xs text-gray-400 font-medium">Theme:</span>
-            <select onchange="setTheme(this.value)" class="bg-gray-800 text-xs text-emerald-400 font-bold px-3 py-1 rounded-lg focus:outline-none cursor-pointer border border-gray-700 hover:border-emerald-500 transition-all">
-                <option value="emerald">Dark Emerald</option>
-                <option value="midnight">Midnight Gold</option>
-                <option value="cyberpunk">Cyberpunk</option>
-                <option value="obsidian">Obsidian</option>
-            </select>
+        <!-- Theme Selector Switcher -->
+        <div class="theme-selector">
+            <button class="theme-btn active" onclick="setTheme('obsidian', this)">
+                <i class="fa-solid fa-moon"></i> Obsidian
+            </button>
+            <button class="theme-btn" onclick="setTheme('cyber', this)">
+                <i class="fa-solid fa-bolt"></i> Cyberpunk
+            </button>
+            <button class="theme-btn" onclick="setTheme('gold', this)">
+                <i class="fa-solid fa-crown"></i> Gold
+            </button>
+            <button class="theme-btn" onclick="setTheme('emerald', this)">
+                <i class="fa-solid fa-gem"></i> Emerald
+            </button>
         </div>
-    </header>
+    </nav>
 
-    <!-- Main Grid -->
-    <main class="max-w-7xl mx-auto px-6 pt-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+    <!-- Main Content Area -->
+    <div class="dashboard-container">
         
-        <!-- Input Form (Left Col) -->
-        <section class="lg:col-span-5 card-panel rounded-2xl p-6">
-            <h2 class="text-lg font-bold text-emerald-400 mb-6 flex items-center gap-2">
-                <i data-lucide="sliders" class="w-5 h-5"></i> Model Input Parameters
-            </h2>
+        <!-- Input Form Glass Panel -->
+        <div class="glass-card">
+            <div class="card-header">
+                <div class="card-title">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Model Input Parameters</span>
+                </div>
+                <span class="badge">GBML Regressor</span>
+            </div>
 
-            <form id="predictionForm" onsubmit="runPrediction(event)" class="grid grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Ship Mode</label>
-                    <input type="number" name="f0" value="1" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Customer ID</label>
-                    <input type="number" name="f1" value="12" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Segment</label>
-                    <input type="number" name="f2" value="0" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Country</label>
-                    <input type="number" name="f3" value="0" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">City</label>
-                    <input type="number" name="f4" value="10" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">State</label>
-                    <input type="number" name="f5" value="3" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Region</label>
-                    <input type="number" name="f6" value="2" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Category</label>
-                    <input type="number" name="f7" value="1" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Sub-Category</label>
-                    <input type="number" name="f8" value="4" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Product ID</label>
-                    <input type="number" name="f9" value="50" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Sales ($)</label>
-                    <input type="number" step="any" name="f10" value="261.96" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Quantity</label>
-                    <input type="number" name="f11" value="2" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
-                <div class="col-span-2">
-                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Discount Ratio (0.00 - 1.00)</label>
-                    <input type="number" step="any" name="f12" value="0.00" required class="w-full bg-gray-900/90 border border-gray-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
+            <form id="predictionForm">
+                <div class="form-grid">
+                    
+                    <!-- Categorical Columns (Real Text Values) -->
+                    <div class="input-group">
+                        <label for="ship_mode">Ship Mode</label>
+                        <select id="ship_mode" name="Ship Mode" required>
+                            <option value="Standard Class">Standard Class</option>
+                            <option value="Second Class">Second Class</option>
+                            <option value="First Class">First Class</option>
+                            <option value="Same Day">Same Day</option>
+                        </select>
+                    </div>
 
-                <button type="submit" id="submitBtn" class="col-span-2 btn-animated py-3.5 rounded-xl mt-3 flex justify-center items-center space-x-2 text-sm tracking-wide">
-                    <i data-lucide="zap" class="w-4 h-4 fill-current"></i>
-                    <span>COMPUTE PREDICTION</span>
-                </button>
+                    <div class="input-group">
+                        <label for="segment">Segment</label>
+                        <select id="segment" name="Segment" required>
+                            <option value="Consumer">Consumer</option>
+                            <option value="Corporate">Corporate</option>
+                            <option value="Home Office">Home Office</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="category">Category</label>
+                        <select id="category" name="Category" required>
+                            <option value="Furniture">Furniture</option>
+                            <option value="Office Supplies">Office Supplies</option>
+                            <option value="Technology">Technology</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="sub_category">Sub-Category</label>
+                        <select id="sub_category" name="Sub-Category" required>
+                            <option value="Bookcases">Bookcases</option>
+                            <option value="Chairs">Chairs</option>
+                            <option value="Labels">Labels</option>
+                            <option value="Tables">Tables</option>
+                            <option value="Storage">Storage</option>
+                            <option value="Furnishings">Furnishings</option>
+                            <option value="Phones">Phones</option>
+                            <option value="Binders">Binders</option>
+                            <option value="Appliances">Appliances</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="region">Region</label>
+                        <select id="region" name="Region" required>
+                            <option value="East">East</option>
+                            <option value="West">West</option>
+                            <option value="Central">Central</option>
+                            <option value="South">South</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="country">Country</label>
+                        <select id="country" name="Country" required>
+                            <option value="United States">United States</option>
+                            <option value="Canada">Canada</option>
+                            <option value="Mexico">Mexico</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="state">State</label>
+                        <input type="text" id="state" name="State" value="California" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="city">City</label>
+                        <input type="text" id="city" name="City" value="Los Angeles" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="customer_name">Customer Name</label>
+                        <input type="text" id="customer_name" name="Customer Name" value="Claire Gute" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="product_name">Product Name</label>
+                        <input type="text" id="product_name" name="Product Name" value="Bush Somerset Bookcase" required>
+                    </div>
+
+                    <!-- Numerical Input Features -->
+                    <div class="input-group">
+                        <label for="sales">Sales ($)</label>
+                        <input type="number" step="0.01" id="sales" name="Sales" value="261.96" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="quantity">Quantity</label>
+                        <input type="number" id="quantity" name="Quantity" value="2" required>
+                    </div>
+
+                    <div class="input-group full-width">
+                        <label for="discount">Discount Rate (0.00 to 1.00)</label>
+                        <input type="number" step="0.01" min="0" max="1" id="discount" name="Discount" value="0.00" required>
+                    </div>
+
+                    <!-- Premium Animated Button -->
+                    <button type="submit" class="btn-submit">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>Generate Intelligence Prediction</span>
+                    </button>
+                </div>
             </form>
-        </section>
+        </div>
 
-        <!-- Output Analytics & Charts (Right Col) -->
-        <section class="lg:col-span-7 space-y-6">
-            
-            <!-- Predicted Valuation Box -->
-            <div class="card-panel rounded-2xl p-6 relative overflow-hidden">
-                <div class="flex justify-between items-start mb-4">
-                    <div>
-                        <span class="text-xs uppercase tracking-wider text-gray-400 font-extrabold flex items-center gap-1.5">
-                            <i data-lucide="trending-up" class="w-4 h-4 text-emerald-400"></i> Model Predicted Profit Output
-                        </span>
-                        <div class="text-5xl font-extrabold mt-2 tracking-tight transition-all" id="predictedVal">$0.00</div>
-                    </div>
-                    <span id="categoryBadge" class="px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide pulse-badge badge-healthy">
-                        Pending Evaluation
-                    </span>
+        <!-- Dashboard & Output Glass Panel -->
+        <div class="glass-card">
+            <div class="card-header">
+                <div class="card-title">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>Analytics & Output Dashboard</span>
                 </div>
-
-                <p id="categoryDescription" class="text-sm text-gray-400 mb-6">Enter features on the left panel to execute inference.</p>
-
-                <!-- Dynamic Multi-Currency Buttons -->
-                <div class="border-t border-gray-800/80 pt-4">
-                    <label class="block text-xs text-gray-400 font-medium mb-2.5">Select View Currency:</label>
-                    <div class="grid grid-cols-4 gap-2.5">
-                        <button onclick="setCurrency('USD')" id="btn-USD" class="curr-btn curr-active py-2 px-3 text-xs rounded-xl bg-gray-800 border border-gray-700">USD ($)</button>
-                        <button onclick="setCurrency('EUR')" id="btn-EUR" class="curr-btn py-2 px-3 text-xs rounded-xl bg-gray-800 border border-gray-700 text-gray-400">EUR (€)</button>
-                        <button onclick="setCurrency('GBP')" id="btn-GBP" class="curr-btn py-2 px-3 text-xs rounded-xl bg-gray-800 border border-gray-700 text-gray-400">GBP (£)</button>
-                        <button onclick="setCurrency('INR')" id="btn-INR" class="curr-btn py-2 px-3 text-xs rounded-xl bg-gray-800 border border-gray-700 text-gray-400">INR (₹)</button>
-                    </div>
-                </div>
-
-                <!-- Categorical Context Badges -->
-                <div class="border-t border-gray-800/80 pt-4 mt-4">
-                    <label class="block text-xs text-gray-400 font-medium mb-2">Decoded Categorical Mapping:</label>
-                    <div class="flex flex-wrap gap-2 text-xs">
-                        <span class="px-3 py-1 bg-gray-900 border border-gray-800 rounded-lg text-gray-300 font-semibold" id="catSegment">Segment: --</span>
-                        <span class="px-3 py-1 bg-gray-900 border border-gray-800 rounded-lg text-gray-300 font-semibold" id="catRegion">Region: --</span>
-                        <span class="px-3 py-1 bg-gray-900 border border-gray-800 rounded-lg text-gray-300 font-semibold" id="catCategory">Category: --</span>
-                    </div>
-                </div>
+                <span class="badge"><i class="fa-solid fa-shield-halved"></i> Real-time</span>
             </div>
 
-            <!-- Charts Row -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div class="card-panel rounded-2xl p-4">
-                    <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400 mb-3 flex items-center gap-2">
-                        <i data-lucide="bar-chart-2" class="w-4 h-4"></i> Profit Impact Drivers
-                    </h3>
-                    <div class="h-44">
-                        <canvas id="impactChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card-panel rounded-2xl p-4">
-                    <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400 mb-3 flex items-center gap-2">
-                        <i data-lucide="pie-chart" class="w-4 h-4"></i> Feature Scale Profile
-                    </h3>
-                    <div class="h-44">
-                        <canvas id="radarChart"></canvas>
-                    </div>
-                </div>
+            <!-- Main Prediction Card -->
+            <div class="result-display">
+                <div style="font-size: 0.9rem; color: var(--text-muted); font-weight: 600;">Predicted Model Output</div>
+                <div class="result-value" id="predictionOutput">--.--</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted);" id="statusText">Submit data to execute model pipeline</div>
             </div>
 
-        </section>
+            <!-- Interactive Analytical Charts -->
+            <div class="charts-container">
+                <div class="chart-box">
+                    <canvas id="analyticsChart"></canvas>
+                </div>
+            </div>
+        </div>
 
-    </main>
+    </div>
 
     <script>
-        lucide.createIcons();
-        let baseUsdVal = 0;
-        let selectedCurrency = 'USD';
-        const rates = { USD: 1.0, EUR: 0.92, GBP: 0.79, INR: 83.2 };
-        const symbols = { USD: '$', EUR: '€', GBP: '£', INR: '₹' };
-        
-        let barChartInstance, radarChartInstance;
+        // Interactive Theme Switcher
+        function setTheme(themeName, btnElement) {
+            document.documentElement.setAttribute('data-theme', themeName);
+            document.querySelectorAll('.theme-btn').forEach(btn => btn.classList.remove('active'));
+            btnElement.classList.add('active');
+            updateChartColors();
+        }
 
-        function initCharts() {
-            // Bar Chart
-            const ctxBar = document.getElementById('impactChart').getContext('2d');
-            barChartInstance = new Chart(ctxBar, {
-                type: 'bar',
-                data: {
-                    labels: ['Sales Val', 'Discount Impact', 'Predicted Profit'],
-                    datasets: [{
-                        data: [261.96, 0, 65.49],
-                        backgroundColor: ['#10b981', '#ef4444', '#3b82f6'],
-                        borderRadius: 6
-                    }]
+        // Chart Initialization
+        const ctx = document.getElementById('analyticsChart').getContext('2d');
+        let analyticsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Sales Impact', 'Discount Penalty', 'Quantity Weight', 'Predicted Target'],
+                datasets: [{
+                    label: 'Feature Weight Influence',
+                    data: [261.96, 0, 2, 0],
+                    backgroundColor: [
+                        'rgba(99, 102, 241, 0.7)',
+                        'rgba(239, 68, 68, 0.7)',
+                        'rgba(168, 85, 247, 0.7)',
+                        'rgba(16, 185, 129, 0.9)'
+                    ],
+                    borderRadius: 8,
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { grid: { color: '#1f2937' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
-                        x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } }
+                scales: {
+                    y: { 
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: { 
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
                     }
                 }
-            });
-
-            // Radar Chart
-            const ctxRadar = document.getElementById('radarChart').getContext('2d');
-            radarChartInstance = new Chart(ctxRadar, {
-                type: 'radar',
-                data: {
-                    labels: ['Ship Mode', 'Segment', 'Region', 'Category', 'Quantity'],
-                    datasets: [{
-                        data: [1, 0, 2, 1, 2],
-                        backgroundColor: 'rgba(16, 185, 129, 0.2)',
-                        borderColor: '#10b981',
-                        borderWidth: 2,
-                        pointBackgroundColor: '#10b981'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        r: {
-                            grid: { color: '#1f2937' },
-                            angleLines: { color: '#1f2937' },
-                            ticks: { display: false }
-                        }
-                    }
-                }
-            });
-        }
-
-        function setTheme(theme) {
-            document.documentElement.setAttribute('data-theme', theme);
-        }
-
-        function setCurrency(curr) {
-            selectedCurrency = curr;
-            ['USD', 'EUR', 'GBP', 'INR'].forEach(c => {
-                const btn = document.getElementById(`btn-${c}`);
-                if (c === curr) {
-                    btn.className = "curr-btn curr-active py-2 px-3 text-xs rounded-xl";
-                } else {
-                    btn.className = "curr-btn py-2 px-3 text-xs rounded-xl bg-gray-800 border border-gray-700 text-gray-400 hover:border-gray-500";
-                }
-            });
-            updateDisplay();
-        }
-
-        function updateDisplay() {
-            const converted = baseUsdVal * rates[selectedCurrency];
-            const formatted = `${symbols[selectedCurrency]}${converted.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            document.getElementById('predictedVal').innerText = formatted;
-        }
-
-        async function runPrediction(event) {
-            if(event) event.preventDefault();
-            
-            const btn = document.getElementById('submitBtn');
-            btn.style.opacity = "0.7";
-            btn.innerText = "COMPUTING...";
-
-            const form = document.getElementById('predictionForm');
-            const formData = new FormData(form);
-            const features = [];
-            for (let i = 0; i < 13; i++) {
-                features.push(parseFloat(formData.get(`f${i}`)));
             }
+        });
+
+        function updateChartColors() {
+            analyticsChart.update();
+        }
+
+        // AJAX Form Submission
+        document.getElementById('predictionForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const data = {};
+            formData.forEach((value, key) => data[key] = value);
+
+            const outputElem = document.getElementById('predictionOutput');
+            const statusElem = document.getElementById('statusText');
+
+            outputElem.innerText = 'Calculating...';
+            statusElem.innerText = 'Running Gradient Boosting inference...';
 
             try {
                 const response = await fetch('/predict', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ features: features })
+                    body: JSON.stringify(data)
                 });
 
                 const result = await response.json();
-                
-                btn.style.opacity = "1";
-                btn.innerHTML = `<i data-lucide="zap" class="w-4 h-4 fill-current"></i><span>COMPUTE PREDICTION</span>`;
-                lucide.createIcons();
 
-                if(result.status === 'error') {
-                    alert('Prediction Error: ' + result.message);
-                    return;
+                if (result.success) {
+                    const val = parseFloat(result.prediction).toFixed(2);
+                    outputElem.innerText = val;
+                    statusElem.innerText = 'Inference complete with high confidence';
+
+                    // Update Chart
+                    analyticsChart.data.datasets[0].data = [
+                        parseFloat(data['Sales']),
+                        parseFloat(data['Discount']) * 100,
+                        parseFloat(data['Quantity']),
+                        val
+                    ];
+                    analyticsChart.update();
+                } else {
+                    outputElem.innerText = 'Error';
+                    statusElem.innerText = result.error || 'Failed to process input';
                 }
-
-                baseUsdVal = result.prediction;
-                updateDisplay();
-
-                // Update Tier Badge & Description
-                const badge = document.getElementById('categoryBadge');
-                badge.innerText = result.tier.category;
-                badge.className = `px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide pulse-badge ${result.tier.badge_class}`;
-                document.getElementById('categoryDescription').innerText = result.tier.description;
-
-                // Update Decoded Badges
-                document.getElementById('catSegment').innerText = `Segment: ${result.decoded.segment}`;
-                document.getElementById('catRegion').innerText = `Region: ${result.decoded.region}`;
-                document.getElementById('catCategory').innerText = `Category: ${result.decoded.category}`;
-
-                // Update Bar Chart
-                barChartInstance.data.datasets[0].data = [features[10], (features[10] * features[12]), result.prediction];
-                barChartInstance.update();
-
-                // Update Radar Chart
-                radarChartInstance.data.datasets[0].data = [features[0], features[2], features[6], features[7], features[11]];
-                radarChartInstance.update();
-
-            } catch(e) {
-                btn.style.opacity = "1";
-                btn.innerHTML = `<span>COMPUTE PREDICTION</span>`;
-                alert('Connection error: ' + e.message);
+            } catch (err) {
+                outputElem.innerText = 'Error';
+                statusElem.innerText = 'Server communication error';
             }
-        }
-
-        window.onload = () => {
-            initCharts();
-            runPrediction();
-        };
+        });
     </script>
 </body>
 </html>
 """
 
-@app.route('/')
+@app.route("/")
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
-        data = request.get_json(force=True)
-        features = data.get('features', [])
+        data = request.get_json()
         
-        # Reshape array for model input vector
-        input_vector = np.array(features).reshape(1, -1)
+        if model is None:
+            return jsonify({"success": False, "error": "Model GBML.pkl file not found."})
+
+        # Expected features in the exact pickled Gradient Boosting model order
+        feature_names = getattr(model, "feature_names_in_", [
+            "Ship Mode", "Customer Name", "Segment", "Country", "City", 
+            "State", "Region", "Category", "Sub-Category", "Product Name", 
+            "Sales", "Quantity", "Discount"
+        ])
         
-        # Predict using loaded model
-        pred = model.predict(input_vector)
-        predicted_val = float(pred[0])
+        # Format and preprocess data
+        input_df = preprocess_inputs(data, feature_names)
         
-        tier = evaluate_profit_tier(predicted_val)
-        
-        # Decode categorical variables safely
-        seg_id = int(features[2]) if len(features) > 2 else 0
-        reg_id = int(features[6]) if len(features) > 6 else 0
-        cat_id = int(features[7]) if len(features) > 7 else 0
+        # Run model prediction
+        prediction = model.predict(input_df)[0]
         
         return jsonify({
-            "status": "success",
-            "prediction": predicted_val,
-            "tier": tier,
-            "decoded": {
-                "segment": SEGMENTS.get(seg_id, f"ID {seg_id}"),
-                "region": REGIONS.get(reg_id, f"ID {reg_id}"),
-                "category": CATEGORIES.get(cat_id, f"ID {cat_id}")
-            }
+            "success": True,
+            "prediction": float(prediction)
         })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
 
-if __name__ == '__main__':
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+if __name__ == "__main__":
     app.run(debug=True, port=5000)
